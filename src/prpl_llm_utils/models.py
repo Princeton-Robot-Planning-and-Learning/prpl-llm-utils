@@ -32,7 +32,7 @@ class PretrainedLargeModel(abc.ABC):
         raise NotImplementedError("Override me!")
 
     @abc.abstractmethod
-    def _run_query(self, query: Query) -> Response:
+    def run_query(self, query: Query) -> Response:
         """This is the main method that subclasses must implement.
 
         This helper method is called by query(), which caches the
@@ -62,7 +62,7 @@ class PretrainedLargeModel(abc.ABC):
             if self._use_cache_only:
                 raise ValueError("No cached response found for prompt.")
             logging.debug(f"Querying model {self.get_id()} with new prompt.")
-            response = self._run_query(query)
+            response = self.run_query(query)
             # Save the response to cache.
             self._cache.save(query, model_id, response)
         return response
@@ -84,7 +84,7 @@ class OpenAIModel(PretrainedLargeModel):
     def get_id(self) -> str:
         return self._model_name
 
-    def _run_query(self, query: Query) -> Response:
+    def run_query(self, query: Query) -> Response:
         assert not query.imgs, "TODO"
         client = openai.OpenAI()
         messages = [{"role": "user", "content": query.prompt, "type": "text"}]
@@ -123,5 +123,5 @@ class CannedResponseModel(PretrainedLargeModel):
     def get_id(self) -> str:
         return "canned"
 
-    def _run_query(self, query: Query) -> Response:
+    def run_query(self, query: Query) -> Response:
         return self._query_to_response[query]
