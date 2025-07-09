@@ -32,7 +32,7 @@ class FilePretrainedLargeModelCache(PretrainedLargeModelCache):
         self._cache_dir.mkdir(exist_ok=True)
 
     def _get_cache_dir_for_query(self, query: Query, model_id: str) -> Path:
-        query_id = query.get_id()
+        query_id = query.get_readable_id()
         cache_foldername = f"{model_id}_{query_id}"
         cache_folderpath = self._cache_dir / cache_foldername
         cache_folderpath.mkdir(exist_ok=True)

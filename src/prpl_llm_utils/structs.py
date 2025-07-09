@@ -30,6 +30,12 @@ class Query:
                 entries.append((key, self.hyperparameters[key]))
         return tuple(entries)
 
+    def get_readable_id(self) -> str:
+        """Get an ID that is at least somewhat human readable."""
+        prompt_prefix = self.prompt[:32]
+        unique_id = str(hash(self))
+        return f"{prompt_prefix}__{unique_id}"
+
     def __hash__(self) -> int:
         """Consistent hashing between runs."""
         return consistent_hash(self.get_id())

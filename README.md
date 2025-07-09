@@ -11,8 +11,10 @@ The main feature is the ability to save and load previous responses.
 ```python
 # Make sure OPENAI_API_KEY is set first.
 from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.cache import FilePretrainedLargeModelCache
 from pathlib import Path
-llm = OpenAIModel("gpt-4o-mini", Path(".llm_cache"))
+cache = FilePretrainedLargeModelCache(Path(".llm_cache"))
+llm = OpenAIModel("gpt-4o-mini", cache)
 response = llm.query("What's a funny one liner?")
 # Querying again loads from cache.
 assert llm.query("What's a funny one liner?").text == response.text
