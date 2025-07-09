@@ -131,7 +131,8 @@ class FunctionOutputRepromptCheck(RepromptCheck):
 
     def get_reprompt(self, query: Query, response: Response) -> Query | None:
         python_code = parse_python_code_from_text(response.text)
-        assert python_code is not None  # should be checked first with syntax
+        if python_code is None:
+            raise RuntimeError("No python code found. Consider SyntaxRepromptCheck().")
         fn = SynthesizedPythonFunction(
             self._function_name, python_code, timeout=self._function_timeout
         )
