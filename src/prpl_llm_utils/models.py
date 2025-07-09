@@ -113,6 +113,9 @@ class OpenAIModel(PretrainedLargeModel):
         assert "OPENAI_API_KEY" in os.environ, "Need to set OPENAI_API_KEY"
         super().__init__(cache_dir, use_cache_only)
 
+    def get_id(self) -> str:
+        return self._model_name
+
     def _run_query(self, query: Query) -> Response:
         assert not query.imgs, "TODO"
         client = openai.OpenAI()
