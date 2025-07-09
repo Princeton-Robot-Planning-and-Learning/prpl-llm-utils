@@ -10,15 +10,14 @@ The main feature is the ability to save and load previous responses.
 
 ```python
 # Make sure OPENAI_API_KEY is set first.
-from prpl_llm_utils.models import OpenAILLM
+from prpl_llm_utils.models import OpenAIModel
 from pathlib import Path
-llm = OpenAILLM("gpt-4o-mini", Path(".llm_cache"))
-response, info = llm.query("What's a funny one liner?")
+llm = OpenAIModel("gpt-4o-mini", Path(".llm_cache"))
+response = llm.query("What's a funny one liner?")
 # Querying again loads from cache.
-assert llm.query("What's a funny one liner?")[0] == response
-# Querying with a different temperature or seed can change the response.
-response2, _ = llm.query("What's a funny one liner?", temperature=0.5)
-response3, _ = llm.query("What's a funny one liner?", seed=123)
+assert llm.query("What's a funny one liner?").text == response.text
+# Querying with different hyperparameters can change the response.
+response2 = llm.query("What's a funny one liner?", hyperparameters={"seed": 123})
 ```
 
 ## Requirements
