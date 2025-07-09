@@ -72,7 +72,6 @@ query = Query(
     """Generate a Python function of the form
 
 def count_vowels(s: str) -> int:
-    print(s)
     # your code here
 
 Note that "y" should be counted.
