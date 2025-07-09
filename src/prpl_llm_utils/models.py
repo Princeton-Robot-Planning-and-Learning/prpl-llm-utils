@@ -193,8 +193,8 @@ class LargeLanguageModel(PretrainedLargeModel):
     def query(
         self,
         prompt: str,
-        temperature: float,
-        seed: int,
+        temperature: float = 1.0,
+        seed: int = 0,
     ) -> tuple[str, dict[str, Any]]:
         """Short-hand that assumes 1 completion and doesn't include images."""
         responses, metadata = self.sample_completions(prompt, None, temperature, seed)
