@@ -60,7 +60,7 @@ reprompt_checks = [SyntaxRepromptCheck()]
 
 # Optionally, define examples to reprompt in case of errors.
 inputs = [("books",), ("stormy",), ("farm",)]
-output_check_fns = [lambda x: x == 2, lambda x: x == 2, lambda x: x == 1]
+output_check_fns = [lambda x: x == 2, lambda x: x in (1, 2), lambda x: x == 1]
 reprompt_checks.append(
     FunctionOutputRepromptCheck(
         function_name, inputs, output_check_fns, function_timeout=1.0
@@ -74,14 +74,12 @@ query = Query(
 def count_vowels(s: str) -> int:
     # your code here
 
-Note that "y" should be counted.
-
 Return only the function; do not give example usages.
 """
 )
 
 # Run synthesis.
-synthesized_python_fn = synthesize_python_function_with_llm(
+count_vowels = synthesize_python_function_with_llm(
     function_name,
     llm,
     query,
@@ -89,10 +87,9 @@ synthesized_python_fn = synthesize_python_function_with_llm(
 )
 
 # Inspect the synthesized function.
-print(synthesized_python_fn.code_str)
+print(count_vowels)
 
 # Use the synthesized function.
-count_vowels = synthesized_python_fn.run
 assert count_vowels("woohoo") == 4
 ```
 
