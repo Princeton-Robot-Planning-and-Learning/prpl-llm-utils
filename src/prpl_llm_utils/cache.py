@@ -99,7 +99,7 @@ class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
     def _ensure_initialized(self, query: Query) -> None:
         """Initialize the database with the required tables and columns."""
         if self._initialized:
-            # Verify hyperparameter keys are consistent
+            # Verify hyperparameter keys are consistent.
             if query.hyperparameters is not None:
                 current_keys = set(query.hyperparameters.keys())
                 if self._hyperparameter_keys is not None:
@@ -112,7 +112,7 @@ class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
             return
 
         with sqlite3.connect(self._database_path) as conn:
-            # Create base table
+            # Create base table.
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS responses (
@@ -126,14 +126,14 @@ class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
             """
             )
 
-            # Add hyperparameter columns if present
+            # Add hyperparameter columns if present.
             if query.hyperparameters is not None:
                 self._hyperparameter_keys = set(query.hyperparameters.keys())
                 for key in self._hyperparameter_keys:
                     try:
                         conn.execute(f"ALTER TABLE responses ADD COLUMN {key} TEXT")
                     except sqlite3.OperationalError:
-                        # Column already exists, ignore
+                        # Column already exists, ignore.
                         pass
 
             conn.commit()
@@ -165,7 +165,7 @@ class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
         self._ensure_initialized(query)
         query_hash = self._get_query_hash(query, model_id)
 
-        # Prepare the data for storage
+        # Prepare the data for storage.
         images_hash = None
         if query.imgs is not None:
             img_hash_list = [str(imagehash.phash(img)) for img in query.imgs]
@@ -173,47 +173,37 @@ class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
 
         metadata_json = json.dumps(response.metadata)
 
+        # Build base columns and values.
+        columns = [
+            "query_hash",
+            "model_id",
+            "prompt",
+            "images_hash",
+            "completion",
+            "metadata",
+        ]
+        values = [
+            query_hash,
+            model_id,
+            query.prompt,
+            images_hash,
+            response.text,
+            metadata_json,
+        ]
+
+        # Add hyperparameters if present.
+        if query.hyperparameters is not None:
+            columns.extend(query.hyperparameters.keys())
+            values.extend(json.dumps(value) for value in query.hyperparameters.values())
+
+        placeholders = ["?"] * len(columns)
+        sql = f"""
+            INSERT OR REPLACE INTO responses 
+            ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+        """
+
         with sqlite3.connect(self._database_path) as conn:
-            # Build dynamic SQL based on hyperparameters
-            if query.hyperparameters is not None:
-                columns = [
-                    "query_hash",
-                    "model_id",
-                    "prompt",
-                    "images_hash",
-                    "completion",
-                    "metadata",
-                ] + list(query.hyperparameters.keys())
-                placeholders = ["?"] * len(columns)
-                values = [
-                    query_hash,
-                    model_id,
-                    query.prompt,
-                    images_hash,
-                    response.text,
-                    metadata_json,
-                ] + [json.dumps(value) for value in query.hyperparameters.values()]
-
-                sql = f"""
-                    INSERT OR REPLACE INTO responses 
-                    ({', '.join(columns)})
-                    VALUES ({', '.join(placeholders)})
-                """
-            else:
-                sql = """
-                    INSERT OR REPLACE INTO responses 
-                    (query_hash, model_id, prompt, images_hash, completion, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """
-                values = [
-                    query_hash,
-                    model_id,
-                    query.prompt,
-                    images_hash,
-                    response.text,
-                    metadata_json,
-                ]
-
             conn.execute(sql, values)
             conn.commit()
 
