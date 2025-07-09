@@ -16,11 +16,12 @@ from prpl_llm_utils.cache import SQLite3PretrainedLargeModelCache
 from pathlib import Path
 cache = SQLite3PretrainedLargeModelCache(Path(".llm_cache.db"))
 llm = OpenAIModel("gpt-4o-mini", cache)
-response = llm.query("What's a funny one liner?")
+response = llm.query("What's a funny one liner?", hyperparameters={"temperature": 1.0})
 # Querying again loads from cache.
-assert llm.query("What's a funny one liner?").text == response.text
+assert llm.query("What's a funny one liner?", hyperparameters={"temperature": 1.0}).text == response.text
 # Querying with different hyperparameters can change the response.
-response2 = llm.query("What's a funny one liner?", hyperparameters={"seed": 123})
+response2 = llm.query("What's a funny one liner?", hyperparameters={"temperature": 0.5})
+# Inspect .llm_cache.db, for example, using https://sqliteviewer.app/.
 ```
 
 ### Cache to files
