@@ -9,7 +9,10 @@ description = "LLM utils from the Princeton Robot Planning and Learning group."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-   "numpy",
+   "ImageHash",
+   "google-generativeai",
+   "tenacity",
+   "openai",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,543 @@
+"""Interfaces for large language models."""
+
+import abc
+import base64
+import json
+import logging
+import os
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Collection
+
+import google.generativeai as genai
+import imagehash
+import openai
+import PIL.Image
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+
+from prpl_llm_utils.utils import consistent_hash
+
+
+class PretrainedLargeModel(abc.ABC):
+    """A pretrained large vision or language model."""
+
+    def __init__(self, cache_dir: Path, use_cache_only: bool = False) -> None:
+        self._cache_dir = cache_dir
+        self._use_cache_only = use_cache_only
+
+    @abc.abstractmethod
+    def get_id(self) -> str:
+        """Get a string identifier for this model.
+
+        This identifier should include sufficient information so that
+        querying the same model with the same prompt and same identifier
+        should yield the same result (assuming temperature 0).
+        """
+        raise NotImplementedError("Override me!")
+
+    @abc.abstractmethod
+    def _sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """This is the main method that subclasses must implement.
+
+        This helper method is called by sample_completions(), which
+        caches the prompts and responses to disk.
+        """
+        raise NotImplementedError("Override me!")
+
+    def sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Sample one or more completions from a prompt; also return metadata.
+
+        Higher temperatures will increase the variance in the responses.
+        The seed may not be used and the results may therefore not be
+        reproducible for models where we only have access through an API
+        that does not expose the ability to set a random seed. Responses
+        are saved to disk.
+        """
+        cache_dir = self._get_cache_dir(
+            prompt,
+            imgs,
+            temperature,
+            seed,
+            num_completions,
+        )
+        if not (cache_dir / "prompt.txt").exists():
+            if self._use_cache_only:
+                raise ValueError("No cached response found for prompt.")
+            logging.debug(f"Querying model {self.get_id()} with new prompt.")
+            # Query the model.
+            completions, metadata = self._sample_completions(
+                prompt, imgs, temperature, seed, num_completions
+            )
+            # Cache the text prompt.
+            prompt_file = cache_dir / "prompt.txt"
+            with open(prompt_file, "w", encoding="utf-8") as f:
+                f.write(prompt)
+            # Cache the image prompt if it exists.
+            if imgs is not None:
+                imgs_folderpath = cache_dir / "imgs"
+                os.makedirs(imgs_folderpath, exist_ok=True)
+                for i, img in enumerate(imgs):
+                    filename_suffix = str(i) + ".jpg"
+                    img.save(imgs_folderpath / filename_suffix)
+            # Cache each response.
+            for i, completion in enumerate(completions):
+                completion_file = cache_dir / f"completion_{i}.txt"
+                with open(completion_file, "w", encoding="utf-8") as f:
+                    f.write(completion)
+            # Cache the metadata.
+            metadata_file = cache_dir / "metadata.json"
+            with open(metadata_file, "w", encoding="utf-8") as f:
+                json.dump(metadata, f)
+            logging.debug(f"Saved model response to {cache_dir}.")
+        # Load the saved completions.
+        completions = []
+        for i in range(num_completions):
+            completion_file = cache_dir / f"completion_{i}.txt"
+            with open(completion_file, "r", encoding="utf-8") as f:
+                completions.append(f.read())
+        # Load the metadata.
+        metadata_file = cache_dir / "metadata.json"
+        with open(metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        logging.debug(f"Loaded model response from {cache_dir}.")
+        return completions, metadata
+
+    @abc.abstractmethod
+    def get_multiple_choice_logprobs(
+        self, prompt: str, choices: list[str], seed: int
+    ) -> tuple[dict[str, float], dict[str, Any]]:
+        """Return log probabilities for a multiple choice question."""
+
+    def _get_cache_dir(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> Path:
+        # Set up the cache directory.
+        os.makedirs(self._cache_dir, exist_ok=True)
+        model_id = self.get_id()
+        prompt_id = consistent_hash(prompt)
+        config_id = f"{temperature}_{seed}_{num_completions}"
+        # If the temperature is 0, the seed does not matter.
+        if temperature == 0.0:
+            config_id = f"most_likely_{num_completions}"
+        cache_foldername = f"{model_id}_{config_id}_{prompt_id}"
+        if imgs is not None:
+            # We also need to hash all the images in the prompt.
+            img_hash_list: list[str] = []
+            for img in imgs:
+                img_hash_list.append(str(imagehash.phash(img)))
+            # NOTE: it's possible that this string (the concatenated hashes of
+            # each image) is very long. This would make the final cache
+            # foldername long. In many operating systems, the maximum folder
+            # name length is 255 characters. To shorten this foldername more, we
+            # can hash this string into a shorter string. For example, look at
+            # https://stackoverflow.com/questions/57263436/hash-like-string-shortener-with-decoder  # pylint:disable=line-too-long
+            imgs_id = consistent_hash("".join(img_hash_list))
+            cache_foldername += f"{imgs_id}"
+        cache_folderpath = self._cache_dir / cache_foldername
+        os.makedirs(cache_folderpath, exist_ok=True)
+        return cache_folderpath
+
+
+class VisionLanguageModel(PretrainedLargeModel):
+    """A class for all VLM's."""
+
+    def sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        assert imgs is not None
+        return super().sample_completions(
+            prompt, imgs, temperature, seed, num_completions
+        )
+
+
+class LargeLanguageModel(PretrainedLargeModel):
+    """A class for all LLM's."""
+
+    def sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        assert imgs is None
+        return super().sample_completions(
+            prompt, imgs, temperature, seed, num_completions
+        )
+
+    def query(
+        self,
+        prompt: str,
+        temperature: float,
+        seed: int,
+    ) -> tuple[str, dict[str, Any]]:
+        """Short-hand that assumes 1 completion and doesn't include images."""
+        responses, metadata = self.sample_completions(prompt, None, temperature, seed)
+        assert len(responses) == 1
+        return responses[0], metadata
+
+
+class OpenAIModel:
+    """Common interface with methods for all OpenAI-based models."""
+
+    def __init__(self, model_name: str, max_tokens: int = 700) -> None:
+        """See https://platform.openai.com/docs/models for the list of
+        available model names."""
+        self._model_name = model_name
+        # Note that max_tokens is the maximum response length (not prompt).
+        # From OpenAI docs: "The token count of your prompt plus max_tokens
+        # cannot exceed the model's context length."
+        self._max_tokens = max_tokens
+        self.set_openai_key()
+
+    def set_openai_key(self, key: str | None = None) -> None:
+        """Set the OpenAI API key."""
+        if key is None:
+            assert "OPENAI_API_KEY" in os.environ
+            key = os.environ["OPENAI_API_KEY"]
+
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(10))
+    def call_openai_api(
+        self,
+        messages: list,
+        model: str = "gpt-4",
+        seed: int | None = None,
+        max_tokens: int = 32,
+        temperature: float = 0.2,
+        verbose: bool = False,
+    ) -> tuple[str, dict[str, Any]]:
+        """Make an API call to OpenAI."""
+        client = openai.OpenAI()
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            seed=seed,
+            max_completion_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if verbose:
+            logging.debug(f"OpenAI API response: {completion}")
+        assert len(completion.choices) == 1
+        assert completion.usage is not None
+        metadata = completion.usage.to_dict()
+        assert completion.choices[0].message.content is not None
+        return completion.choices[0].message.content, metadata
+
+
+class GoogleGeminiModel:
+    """Common interface and methods for all Gemini-based models.
+
+    Assumes that an environment variable GOOGLE_API_KEY is set with the
+    necessary API key to query the particular model name.
+    """
+
+    def __init__(self, model_name: str) -> None:
+        """See https://ai.google.dev/models/gemini for the list of available
+        model names."""
+        self._model_name = model_name
+        assert "GOOGLE_API_KEY" in os.environ
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        self._model = genai.GenerativeModel(self._model_name)
+
+
+class OpenAILLM(LargeLanguageModel, OpenAIModel):
+    """Interface to openAI LLMs.
+
+    Assumes that an environment variable OPENAI_API_KEY is set to a
+    private API key for beta.openai.com.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        cache_dir: Path,
+        max_tokens: int = 700,
+        use_cache_only: bool = False,
+    ) -> None:
+        LargeLanguageModel.__init__(self, cache_dir, use_cache_only)
+        OpenAIModel.__init__(self, model_name, max_tokens)
+
+    def get_id(self) -> str:
+        return f"openai-{self._model_name}"
+
+    def _sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        assert imgs is None
+        messages = [{"role": "user", "content": prompt, "type": "text"}]
+        assert num_completions == 1, "TODO"
+        response, metadata = self.call_openai_api(
+            messages,
+            model=self._model_name,
+            seed=seed,
+            max_tokens=self._max_tokens,
+            temperature=temperature,
+        )
+        return [response], metadata
+
+    def get_multiple_choice_logprobs(
+        self, prompt: str, choices: list[str], seed: int
+    ) -> tuple[dict[str, float], dict[str, Any]]:
+        """Return log probabilities for a multiple choice question."""
+        choices_prompt = "\n".join([f"{i+1}. {c}" for i, c in enumerate(choices)])
+        extended_prompt = f"""{prompt}
+
+Given the choices below, return the number corresponding to your answer. Do not say anything except the number.
+
+Choices:
+{choices_prompt}
+"""
+        # Handle caching: use JSON format for this.
+        cache_dir = self._get_cache_dir(
+            prompt=extended_prompt,
+            imgs=None,
+            temperature=0.0,
+            seed=seed,
+        )
+        cache_filepath = cache_dir / "multiple_choice.json"
+        cache_metadata_filepath = cache_dir / "metadata.json"
+
+        if not cache_filepath.exists():
+            logging.debug(f"Querying model {self.get_id()} with new prompt.")
+            messages = [{"role": "user", "content": extended_prompt, "type": "text"}]
+            client = openai.OpenAI()
+            completion = client.chat.completions.create(
+                model=self._model_name,
+                messages=messages,  # type: ignore
+                seed=seed,
+                logprobs=True,
+                top_logprobs=len(choices),
+            )
+            assert completion.usage is not None
+            metadata = completion.usage.to_dict()
+            logprobs = completion.choices[0].logprobs
+            assert logprobs is not None
+            assert logprobs.content is not None
+            top_logprobs = logprobs.content[0].top_logprobs
+            token_to_logprob = {c.token: c.logprob for c in top_logprobs}
+            choice_to_logprob: dict[str, float] = {}
+            for i, choice in enumerate(choices):
+                logprob = token_to_logprob.get(f"{i+1}", -float("inf"))
+                choice_to_logprob[choice] = logprob
+            with open(cache_filepath, "w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "prompt": prompt,
+                        "choices": choices,
+                        "logprobs": choice_to_logprob,
+                    },
+                    fp,
+                )
+            logging.debug(f"Saved model response to {cache_filepath}.")
+            with open(cache_metadata_filepath, "w", encoding="utf-8") as fp:
+                json.dump(metadata, fp)
+        with open(cache_filepath, "r", encoding="utf-8") as fp:
+            choice_to_logprob = json.load(fp)["logprobs"]
+        with open(cache_metadata_filepath, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+        return choice_to_logprob, metadata
+
+
+class GoogleGeminiLLM(LargeLanguageModel, GoogleGeminiModel):
+    """Interface to the Google Gemini VLM (1.5).
+
+    Assumes that an environment variable GOOGLE_API_KEY is set with the
+    necessary API key to query the particular model name.
+    """
+
+    def __init__(
+        self, model_name: str, cache_dir: Path, use_cache_only: bool = False
+    ) -> None:
+        LargeLanguageModel.__init__(self, cache_dir, use_cache_only)
+        GoogleGeminiModel.__init__(self, model_name)
+
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(10))
+    def _sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        del seed  # unused
+        assert imgs is None
+        generation_config = genai.types.GenerationConfig(  # pylint:disable=no-member
+            candidate_count=num_completions, temperature=temperature
+        )
+        response = self._model.generate_content(
+            [prompt], generation_config=generation_config
+        )  # type: ignore
+        response.resolve()  # type: ignore
+        metadata: dict[str, Any] = {}  # nothing saved for now
+        return [response.text], metadata
+
+    def get_id(self) -> str:
+        return f"Google-{self._model_name}"
+
+    def get_multiple_choice_logprobs(
+        self, prompt: str, choices: list[str], seed: int
+    ) -> tuple[dict[str, float], dict[str, Any]]:
+        raise NotImplementedError("TODO")
+
+
+class GoogleGeminiVLM(VisionLanguageModel, GoogleGeminiModel):
+    """Interface to the Google Gemini VLM (1.5).
+
+    Assumes that an environment variable GOOGLE_API_KEY is set with the
+    necessary API key to query the particular model name.
+    """
+
+    def __init__(
+        self, model_name: str, cache_dir: Path, use_cache_only: bool = False
+    ) -> None:
+        VisionLanguageModel.__init__(self, cache_dir, use_cache_only)
+        GoogleGeminiModel.__init__(self, model_name)
+
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(20))
+    def _sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        del seed  # unused
+        assert imgs is not None
+        generation_config = genai.types.GenerationConfig(  # pylint:disable=no-member
+            candidate_count=num_completions, temperature=temperature
+        )
+        response = self._model.generate_content(
+            [prompt] + imgs, generation_config=generation_config  # type: ignore
+        )
+        response.resolve()  # type: ignore
+        metadata: dict[str, Any] = {}  # nothing saved for now
+        return [response.text], metadata
+
+    def get_id(self) -> str:
+        return f"Google-{self._model_name}"
+
+    def get_multiple_choice_logprobs(
+        self, prompt: str, choices: list[str], seed: int
+    ) -> tuple[dict[str, float], dict[str, Any]]:
+        raise NotImplementedError("TODO")
+
+
+class OpenAIVLM(VisionLanguageModel, OpenAIModel):
+    """Interface for OpenAI's VLMs, including GPT-4 Turbo (and preview
+    versions)."""
+
+    def __init__(
+        self,
+        model_name: str,
+        cache_dir: Path,
+        max_tokens: int = 700,
+        use_cache_only: bool = False,
+    ) -> None:
+        VisionLanguageModel.__init__(self, cache_dir, use_cache_only)
+        OpenAIModel.__init__(self, model_name, max_tokens)
+
+    def prepare_vision_messages(
+        self,
+        images: list[PIL.Image.Image],
+        prefix: str | None = None,
+        suffix: str | None = None,
+        image_size: int = 512,
+        detail: str = "auto",
+    ) -> list[dict[str, str | list[dict[str, str | Collection[str]]]]]:
+        """Prepare text and image messages for the OpenAI API."""
+        content: list[dict[str, str | Collection[str]]] = []
+        if prefix:
+            content.append({"text": prefix, "type": "text"})
+        assert images
+        assert detail in ["auto", "low", "high"]
+        for img in images:
+            img_resized = img
+            if image_size:
+                factor = image_size / max(img.size)
+                img_resized = img.resize(
+                    (int(img.size[0] * factor), int(img.size[1] * factor))
+                )
+            # Convert the image to PNG format and encode it in base64
+            buffer = BytesIO()
+            img_resized.save(buffer, format="PNG")
+            buf = buffer.getvalue()
+            frame = base64.b64encode(buf).decode("utf-8")
+            content_str = {
+                "image_url": {
+                    "url": f"data:image/png;base64,{frame}",
+                    "detail": "auto",
+                },
+                "type": "image_url",
+            }
+            content.append(content_str)
+        if suffix:
+            content.append({"text": suffix, "type": "text"})
+        return [{"role": "user", "content": content}]
+
+    def get_id(self) -> str:
+        """Get an identifier for the model."""
+        return f"OpenAI-{self._model_name}"
+
+    def _sample_completions(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None,
+        temperature: float,
+        seed: int,
+        num_completions: int = 1,
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Query the model and get responses."""
+        del seed  # unused.
+        if imgs is None:
+            raise ValueError("images cannot be None")
+        messages = self.prepare_vision_messages(
+            prefix=prompt, images=imgs, detail="auto"
+        )
+        responses = [
+            self.call_openai_api(
+                messages,
+                model=self._model_name,
+                max_tokens=self._max_tokens,
+                temperature=temperature,
+            )[0]
+            for _ in range(num_completions)
+        ]
+        metadata: dict[str, Any] = {}  # nothing saved for now
+        return responses, metadata
+
+    def get_multiple_choice_logprobs(
+        self, prompt: str, choices: list[str], seed: int
+    ) -> tuple[dict[str, float], dict[str, Any]]:
+        raise NotImplementedError("TODO")
