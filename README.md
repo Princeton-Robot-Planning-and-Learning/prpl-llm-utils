@@ -60,7 +60,7 @@ reprompt_checks = [SyntaxRepromptCheck()]
 
 # Optionally, define examples to reprompt in case of errors.
 inputs = [("books",), ("stormy",), ("farm",)]
-output_check_fns = [lambda x: x == 2, lambda x : x == 2, lambda x: x == 1]
+output_check_fns = [lambda x: x == 2, lambda x: x == 2, lambda x: x == 1]
 reprompt_checks.append(
     FunctionOutputRepromptCheck(
         function_name, inputs, output_check_fns, function_timeout=1.0
