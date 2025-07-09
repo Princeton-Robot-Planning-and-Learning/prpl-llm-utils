@@ -8,6 +8,22 @@ The main feature is the ability to save and load previous responses.
 
 ## Usage Examples
 
+### Cache to SQLite3 Database (Recommended)
+```python
+# Make sure OPENAI_API_KEY is set first.
+from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.cache import SQLite3PretrainedLargeModelCache
+from pathlib import Path
+cache = SQLite3PretrainedLargeModelCache(Path(".llm_cache.db"))
+llm = OpenAIModel("gpt-4o-mini", cache)
+response = llm.query("What's a funny one liner?")
+# Querying again loads from cache.
+assert llm.query("What's a funny one liner?").text == response.text
+# Querying with different hyperparameters can change the response.
+response2 = llm.query("What's a funny one liner?", hyperparameters={"seed": 123})
+```
+
+### Cache to files
 ```python
 # Make sure OPENAI_API_KEY is set first.
 from prpl_llm_utils.models import OpenAIModel
@@ -16,10 +32,7 @@ from pathlib import Path
 cache = FilePretrainedLargeModelCache(Path(".llm_cache"))
 llm = OpenAIModel("gpt-4o-mini", cache)
 response = llm.query("What's a funny one liner?")
-# Querying again loads from cache.
-assert llm.query("What's a funny one liner?").text == response.text
-# Querying with different hyperparameters can change the response.
-response2 = llm.query("What's a funny one liner?", hyperparameters={"seed": 123})
+# Inspect the files in .llm_cache.
 ```
 
 ## Requirements

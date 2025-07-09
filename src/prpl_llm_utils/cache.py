@@ -77,3 +77,9 @@ class FilePretrainedLargeModelCache(PretrainedLargeModelCache):
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(response.metadata, f)
         logging.debug(f"Saved model response to {cache_dir}.")
+
+
+class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
+    """A cache that uses a SQLite3 database."""
+    def __init__(self, database_path: Path) -> None:
+        self._database_path = database_path
