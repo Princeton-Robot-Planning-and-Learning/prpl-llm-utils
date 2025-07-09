@@ -25,6 +25,10 @@ from prpl_llm_utils.structs import Query, Response
 mp.set_start_method("fork")
 
 
+class SynthesizedPythonFunctionRunError(Exception):
+    """An exception raised during a call to SynthesizedPythonFunction.run()."""
+
+
 @dataclass(frozen=True)
 class SynthesizedPythonFunction:
     """Wraps a piece of Python code that contains a function with a given name.
@@ -68,7 +72,15 @@ class SynthesizedPythonFunction:
         # call timing out.
 
         def _fn_in_place(result_dict: dict, *args: Any) -> Any:
-            result_dict["fn_output"] = fn(*args)
+            try:
+                result_dict["fn_output"] = fn(*args)
+            except BaseException as e:
+                exception_msg = "\n".join(traceback.format_exception(e))
+                error_msg = (
+                    f"Given the input {input_args}, {self.function_name} raised an "
+                    f"exception:\n{exception_msg}"
+                )
+                result_dict["error_msg"] = error_msg
 
         manager = mp.Manager()
         result_proxy_dict = manager.dict()
@@ -87,8 +99,9 @@ class SynthesizedPythonFunction:
             # Give it a few more seconds then kill for good.
             p.join(3)
             p.kill()
-            # Raise timeout error.
-            raise TimeoutError
+            raise SynthesizedPythonFunctionRunError("Possible infinite loop.")
+        if "error_msg" in result_dict:
+            raise SynthesizedPythonFunctionRunError(result_dict["error_msg"])
         return result_dict["fn_output"]
 
 
@@ -139,11 +152,8 @@ class FunctionOutputRepromptCheck(RepromptCheck):
         for fn_in, check_fn in zip(self._inputs, self._output_check_fns, strict=True):
             try:
                 fn_out = fn.run(*fn_in)
-            except TimeoutError:
-                error_msg = (
-                    f"Given the input {fn_in}, {self._function_name} timed out, "
-                    "possibly indicating an infinite loop."
-                )
+            except SynthesizedPythonFunctionRunError as e:
+                error_msg = e.args[0]
                 return create_reprompt_from_error_message(query, response, error_msg)
             if not check_fn(fn_out):
                 error_msg = (
