@@ -4,21 +4,20 @@
 
 LLM utilities from the Princeton Robot Planning and Learning group.
 
-The main feature is the ability to save and load previous responses. There are a few other nice features, such as automatically retrying queries to deal with rate limiting or spotty internet.
+The main feature is the ability to save and load previous responses.
 
 ## Usage Examples
 
 ```python
 # Make sure OPENAI_API_KEY is set first.
-from prpl_llm_utils.models import OpenAILLM
+from prpl_llm_utils.models import OpenAIModel
 from pathlib import Path
-llm = OpenAILLM("gpt-4o-mini", Path(".llm_cache"))
-response, info = llm.query("Tell me a story")
+llm = OpenAIModel("gpt-4o-mini", Path(".llm_cache"))
+response = llm.query("What's a funny one liner?")
 # Querying again loads from cache.
-assert llm.query("Tell me a story")[0] == response
-# Querying with a different temperature or seed can change the response.
-response2, _ = llm.query("Tell me a story", temperature=0.5)
-response3, _ = llm.query("Tell me a story", seed=123)
+assert llm.query("What's a funny one liner?").text == response.text
+# Querying with different hyperparameters can change the response.
+response2 = llm.query("What's a funny one liner?", hyperparameters={"seed": 123})
 ```
 
 ## Requirements

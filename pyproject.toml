@@ -10,8 +10,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
    "ImageHash",
-   "google-generativeai",
-   "tenacity",
    "openai",
 ]
 
