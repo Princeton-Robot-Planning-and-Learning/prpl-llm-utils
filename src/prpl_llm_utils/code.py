@@ -8,7 +8,7 @@ import traceback
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from prpl_llm_utils.models import PretrainedLargeModel
 from prpl_llm_utils.reprompting import (
@@ -71,6 +71,40 @@ class SyntaxRepromptCheck(RepromptCheck):
             except SyntaxError as e:
                 error_msg = "\n".join(traceback.format_exception(e))
         return create_reprompt_from_error_message(query, response, error_msg)
+
+
+class FunctionOutputRepromptCheck(RepromptCheck):
+    """Check whether the synthesized Python function produces valid output.
+
+    It is up to the user of this class how "valid" is defined.
+    """
+
+    def __init__(
+        self,
+        function_name: str,
+        inputs: list[Any],
+        output_check_fns: list[Callable[[Any], bool]],
+    ) -> None:
+        assert len(inputs) == len(
+            output_check_fns
+        ), "Expecting one check function per input"
+        self._function_name = function_name
+        self._inputs = inputs
+        self._output_check_fns = output_check_fns
+
+    def get_reprompt(self, query: Query, response: Response) -> Query | None:
+        python_code = parse_python_code_from_text(response.text)
+        assert python_code is not None  # should be checked first with syntax
+        fn = SynthesizedPythonFunction(self._function_name, python_code)
+        for fn_in, check_fn in zip(self._inputs, self._output_check_fns, strict=True):
+            fn_out = fn.run(*fn_in)
+            if not check_fn(fn_out):
+                error_msg = (
+                    f"Given the input {fn_in}, the output of {self._function_name} "
+                    f"was {fn_out}, which is invalid"
+                )
+                return create_reprompt_from_error_message(query, response, error_msg)
+        return None
 
 
 def parse_python_code_from_text(text: str) -> str | None:

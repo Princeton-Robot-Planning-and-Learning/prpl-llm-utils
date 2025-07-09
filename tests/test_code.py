@@ -5,6 +5,7 @@ from pathlib import Path
 
 from prpl_llm_utils.cache import FilePretrainedLargeModelCache
 from prpl_llm_utils.code import (
+    FunctionOutputRepromptCheck,
     SyntaxRepromptCheck,
     SynthesizedPythonFunction,
     synthesize_python_function_with_llm,
@@ -42,9 +43,14 @@ def test_synthesize_python_function_with_llm():
     cache_path = Path(cache_dir.name)
     cache = FilePretrainedLargeModelCache(cache_path)
 
-    reprompt_checks = [SyntaxRepromptCheck()]
     function_name = "count_good_dogs"
     input_output_examples = [([["nomsy", "rover"]], 2), ([["nomsy"]], 1)]
+    inputs = [i for i, _ in input_output_examples]
+    output_check_fns = [lambda x, o=o: x == o for _, o in input_output_examples]
+    reprompt_checks = [
+        SyntaxRepromptCheck(),
+        FunctionOutputRepromptCheck(function_name, inputs, output_check_fns),
+    ]
 
     query = Query(
         """Generate a Python function of the form
@@ -63,6 +69,27 @@ def count_good_dogs(dog_names: list[str) -> int:
         {},
     )
 
+    response_with_semantic_failure = Response(
+        """```python
+def count_good_dogs(dog_names: list[str]) -> int:
+    return 2
+```    
+""",
+        {},
+    )
+
+    response_with_infinite_loop = Response(
+        """```python
+def count_good_dogs(dog_names: list[str]) -> int:
+    num_good_dogs = 0
+    while True:
+        num_good_dogs += 1
+    return num_good_dogs
+```    
+""",
+        {},
+    )
+
     response_with_correct_answer = Response(
         """```python
 def count_good_dogs(dog_names: list[str]) -> int:
@@ -72,7 +99,13 @@ def count_good_dogs(dog_names: list[str]) -> int:
         {},
     )
 
-    ordered_responses = [response_with_syntax_error, response_with_correct_answer]
+    ordered_responses = [
+        response_with_syntax_error,
+        response_with_semantic_failure,
+        # response_with_infinite_loop,
+        response_with_correct_answer,
+    ]
+
     llm = OrderedResponseModel(ordered_responses, cache)
 
     synthesized_python_fn = synthesize_python_function_with_llm(
