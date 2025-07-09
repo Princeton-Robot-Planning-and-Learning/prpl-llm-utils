@@ -2,6 +2,9 @@
 
 import ast
 import importlib
+import multiprocessing as mp
+import os
+import signal
 import sys
 import tempfile
 import traceback
@@ -18,6 +21,9 @@ from prpl_llm_utils.reprompting import (
 )
 from prpl_llm_utils.structs import Query, Response
 
+# This speeds up the sandbox for code synthesis by a lot.
+mp.set_start_method("fork")
+
 
 @dataclass(frozen=True)
 class SynthesizedPythonFunction:
@@ -26,10 +32,13 @@ class SynthesizedPythonFunction:
     The typical flow is that an LLM outputs the code as a string, then
     we create one of these class instances, then invoke the function by
     calling run().
+
+    If timeout is exceeded on run() call, a TimeoutError is raised.
     """
 
     function_name: str
     code_str: str
+    timeout: float = 30.0  # max time in seconds that run() is allowed
 
     @cached_property
     def filepath(self) -> Path:
@@ -54,7 +63,33 @@ class SynthesizedPythonFunction:
         """Run the function on an input (that will be unpacked)."""
         module = self._load_module()
         fn = getattr(module, self.function_name)
-        return fn(*input_args)
+
+        # All of the code below is for handling the possibility of the function
+        # call timing out.
+
+        def _fn_in_place(result_dict: dict, *args: Any) -> Any:
+            result_dict["fn_output"] = fn(*args)
+
+        manager = mp.Manager()
+        result_proxy_dict = manager.dict()
+        p = mp.Process(
+            target=_fn_in_place,
+            args=(result_proxy_dict,) + tuple(input_args),
+        )
+        p.start()
+        p.join(self.timeout)
+        result_dict = dict(result_proxy_dict)
+        # Timeout reached.
+        if p.is_alive():
+            # Treated like a KeyboardInterrupt.
+            assert p.pid is not None
+            os.kill(p.pid, signal.SIGINT)
+            # Give it a few more seconds then kill for good.
+            p.join(3)
+            p.kill()
+            # Raise timeout error.
+            raise TimeoutError
+        return result_dict["fn_output"]
 
 
 class SyntaxRepromptCheck(RepromptCheck):
@@ -84,6 +119,7 @@ class FunctionOutputRepromptCheck(RepromptCheck):
         function_name: str,
         inputs: list[Any],
         output_check_fns: list[Callable[[Any], bool]],
+        function_timeout: float = 30.0,
     ) -> None:
         assert len(inputs) == len(
             output_check_fns
@@ -91,13 +127,23 @@ class FunctionOutputRepromptCheck(RepromptCheck):
         self._function_name = function_name
         self._inputs = inputs
         self._output_check_fns = output_check_fns
+        self._function_timeout = function_timeout
 
     def get_reprompt(self, query: Query, response: Response) -> Query | None:
         python_code = parse_python_code_from_text(response.text)
         assert python_code is not None  # should be checked first with syntax
-        fn = SynthesizedPythonFunction(self._function_name, python_code)
+        fn = SynthesizedPythonFunction(
+            self._function_name, python_code, timeout=self._function_timeout
+        )
         for fn_in, check_fn in zip(self._inputs, self._output_check_fns, strict=True):
-            fn_out = fn.run(*fn_in)
+            try:
+                fn_out = fn.run(*fn_in)
+            except TimeoutError:
+                error_msg = (
+                    f"Given the input {fn_in}, {self._function_name} timed out, "
+                    "possibly indicating an infinite loop."
+                )
+                return create_reprompt_from_error_message(query, response, error_msg)
             if not check_fn(fn_out):
                 error_msg = (
                     f"Given the input {fn_in}, the output of {self._function_name} "
@@ -129,6 +175,7 @@ def synthesize_python_function_with_llm(
     query: Query,
     reprompt_checks: list[RepromptCheck] | None = None,
     max_attempts: int = 5,
+    function_timeout: float = 30.0,
 ) -> SynthesizedPythonFunction:
     """Synthesize a Python function with an LLM."""
     if reprompt_checks is None:
@@ -137,4 +184,6 @@ def synthesize_python_function_with_llm(
     python_code = parse_python_code_from_text(response.text)
     if python_code is None:
         raise RuntimeError("No python code found. Consider SyntaxRepromptCheck().")
-    return SynthesizedPythonFunction(function_name, python_code)
+    return SynthesizedPythonFunction(
+        function_name, python_code, timeout=function_timeout
+    )

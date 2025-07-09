@@ -49,7 +49,9 @@ def test_synthesize_python_function_with_llm():
     output_check_fns = [lambda x, o=o: x == o for _, o in input_output_examples]
     reprompt_checks = [
         SyntaxRepromptCheck(),
-        FunctionOutputRepromptCheck(function_name, inputs, output_check_fns),
+        FunctionOutputRepromptCheck(
+            function_name, inputs, output_check_fns, function_timeout=1.0
+        ),
     ]
 
     query = Query(
@@ -102,14 +104,17 @@ def count_good_dogs(dog_names: list[str]) -> int:
     ordered_responses = [
         response_with_syntax_error,
         response_with_semantic_failure,
-        # response_with_infinite_loop,
+        response_with_infinite_loop,
         response_with_correct_answer,
     ]
 
     llm = OrderedResponseModel(ordered_responses, cache)
 
     synthesized_python_fn = synthesize_python_function_with_llm(
-        function_name, llm, query, reprompt_checks=reprompt_checks
+        function_name,
+        llm,
+        query,
+        reprompt_checks=reprompt_checks,
     )
 
     for input_args, expected_output in input_output_examples:
