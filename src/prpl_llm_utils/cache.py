@@ -3,7 +3,10 @@
 import abc
 import json
 import logging
+import sqlite3
 from pathlib import Path
+
+import imagehash
 
 from prpl_llm_utils.structs import Query, Response
 
@@ -81,5 +84,139 @@ class FilePretrainedLargeModelCache(PretrainedLargeModelCache):
 
 class SQLite3PretrainedLargeModelCache(PretrainedLargeModelCache):
     """A cache that uses a SQLite3 database."""
+
     def __init__(self, database_path: Path) -> None:
         self._database_path = database_path
+        self._database_path.parent.mkdir(exist_ok=True)
+        self._initialized = False
+        self._hyperparameter_keys: set[str] | None = None
+
+    def _get_query_hash(self, query: Query, model_id: str) -> str:
+        """Get a unique hash for the query and model combination."""
+        query_id = query.get_id()
+        return f"{model_id}_{hash(query_id)}"
+
+    def _ensure_initialized(self, query: Query) -> None:
+        """Initialize the database with the required tables and columns."""
+        if self._initialized:
+            # Verify hyperparameter keys are consistent
+            if query.hyperparameters is not None:
+                current_keys = set(query.hyperparameters.keys())
+                if self._hyperparameter_keys is not None:
+                    assert current_keys == self._hyperparameter_keys, (
+                        f"Hyperparameter changed from {self._hyperparameter_keys} "
+                        f"to {current_keys}. All queries must use the same."
+                    )
+                else:
+                    self._hyperparameter_keys = current_keys
+            return
+
+        with sqlite3.connect(self._database_path) as conn:
+            # Create base table
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS responses (
+                    query_hash TEXT PRIMARY KEY,
+                    model_id TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    images_hash TEXT,
+                    completion TEXT NOT NULL,
+                    metadata TEXT NOT NULL
+                )
+            """
+            )
+
+            # Add hyperparameter columns if present
+            if query.hyperparameters is not None:
+                self._hyperparameter_keys = set(query.hyperparameters.keys())
+                for key in self._hyperparameter_keys:
+                    try:
+                        conn.execute(f"ALTER TABLE responses ADD COLUMN {key} TEXT")
+                    except sqlite3.OperationalError:
+                        # Column already exists, ignore
+                        pass
+
+            conn.commit()
+            self._initialized = True
+
+    def try_load_response(self, query: Query, model_id: str) -> Response:
+        self._ensure_initialized(query)
+        query_hash = self._get_query_hash(query, model_id)
+
+        with sqlite3.connect(self._database_path) as conn:
+            cursor = conn.execute(
+                "SELECT completion, metadata FROM responses WHERE query_hash = ?",
+                (query_hash,),
+            )
+            result = cursor.fetchone()
+
+            if result is None:
+                raise ResponseNotFound
+
+            completion, metadata_json = result
+            metadata = json.loads(metadata_json)
+            response = Response(completion, metadata)
+            logging.debug(
+                f"Loaded model response from SQLite for query hash {query_hash}."
+            )
+            return response
+
+    def save(self, query: Query, model_id: str, response: Response) -> None:
+        self._ensure_initialized(query)
+        query_hash = self._get_query_hash(query, model_id)
+
+        # Prepare the data for storage
+        images_hash = None
+        if query.imgs is not None:
+            img_hash_list = [str(imagehash.phash(img)) for img in query.imgs]
+            images_hash = json.dumps(img_hash_list)
+
+        metadata_json = json.dumps(response.metadata)
+
+        with sqlite3.connect(self._database_path) as conn:
+            # Build dynamic SQL based on hyperparameters
+            if query.hyperparameters is not None:
+                columns = [
+                    "query_hash",
+                    "model_id",
+                    "prompt",
+                    "images_hash",
+                    "completion",
+                    "metadata",
+                ] + list(query.hyperparameters.keys())
+                placeholders = ["?"] * len(columns)
+                values = [
+                    query_hash,
+                    model_id,
+                    query.prompt,
+                    images_hash,
+                    response.text,
+                    metadata_json,
+                ] + [json.dumps(value) for value in query.hyperparameters.values()]
+
+                sql = f"""
+                    INSERT OR REPLACE INTO responses 
+                    ({', '.join(columns)})
+                    VALUES ({', '.join(placeholders)})
+                """
+            else:
+                sql = """
+                    INSERT OR REPLACE INTO responses 
+                    (query_hash, model_id, prompt, images_hash, completion, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """
+                values = [
+                    query_hash,
+                    model_id,
+                    query.prompt,
+                    images_hash,
+                    response.text,
+                    metadata_json,
+                ]
+
+            conn.execute(sql, values)
+            conn.commit()
+
+        logging.debug(
+            f"Saved model response to SQLite database for query hash {query_hash}."
+        )
