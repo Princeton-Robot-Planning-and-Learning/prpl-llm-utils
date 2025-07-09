@@ -45,11 +45,11 @@ class SynthesizedPythonFunction:
         spec.loader.exec_module(module)
         return module
 
-    def run(self, input_args: list[Any]) -> Any:
+    def run(self, *input_args: Any) -> Any:
         """Run the function on an input (that will be unpacked)."""
         module = self._load_module()
         fn = getattr(module, self.function_name)
-        return fn(*input_args)  # type: ignore
+        return fn(*input_args)
 
 
 class SyntaxRepromptCheck(RepromptCheck):
