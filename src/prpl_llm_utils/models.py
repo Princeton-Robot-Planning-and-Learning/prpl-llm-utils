@@ -32,7 +32,7 @@ class PretrainedLargeModel(abc.ABC):
         raise NotImplementedError("Override me!")
 
     @abc.abstractmethod
-    def run_query(self, query: Query) -> Response:
+    def _run_query(self, query: Query) -> Response:
         """This is the main method that subclasses must implement.
 
         This helper method is called by query(), which caches the
@@ -40,18 +40,8 @@ class PretrainedLargeModel(abc.ABC):
         """
         raise NotImplementedError("Override me!")
 
-    def query(
-        self,
-        prompt: str,
-        imgs: list[PIL.Image.Image] | None = None,
-        hyperparameters: dict[str, Hashable] | None = None,
-    ) -> Response:
-        """Sample one or more completions from a prompt; also return metadata.
-
-        Responses are saved to disk.
-        """
-        # Create the query.
-        query = Query(prompt, imgs=imgs, hyperparameters=hyperparameters)
+    def run_query(self, query: Query) -> Response:
+        """Run a built query."""
         # Try to load from the cache.
         model_id = self.get_id()
         try:
@@ -62,10 +52,20 @@ class PretrainedLargeModel(abc.ABC):
             if self._use_cache_only:
                 raise ValueError("No cached response found for prompt.")
             logging.debug(f"Querying model {self.get_id()} with new prompt.")
-            response = self.run_query(query)
+            response = self._run_query(query)
             # Save the response to cache.
             self._cache.save(query, model_id, response)
         return response
+
+    def query(
+        self,
+        prompt: str,
+        imgs: list[PIL.Image.Image] | None = None,
+        hyperparameters: dict[str, Hashable] | None = None,
+    ) -> Response:
+        """Build and run a query."""
+        query = Query(prompt, imgs=imgs, hyperparameters=hyperparameters)
+        return self.run_query(query)
 
 
 class OpenAIModel(PretrainedLargeModel):
@@ -84,7 +84,7 @@ class OpenAIModel(PretrainedLargeModel):
     def get_id(self) -> str:
         return self._model_name
 
-    def run_query(self, query: Query) -> Response:
+    def _run_query(self, query: Query) -> Response:
         assert not query.imgs, "TODO"
         client = openai.OpenAI()
         messages = [{"role": "user", "content": query.prompt, "type": "text"}]
@@ -123,5 +123,33 @@ class CannedResponseModel(PretrainedLargeModel):
     def get_id(self) -> str:
         return "canned"
 
-    def run_query(self, query: Query) -> Response:
+    def _run_query(self, query: Query) -> Response:
         return self._query_to_response[query]
+
+
+class OrderedResponseModel(PretrainedLargeModel):
+    """A model that returns responses from a list and raises an error if the
+    index is exceeded.
+
+    This is useful for development and testing.
+    """
+
+    def __init__(
+        self,
+        responses: list[Response],
+        cache: PretrainedLargeModelCache,
+        use_cache_only: bool = False,
+    ) -> None:
+        # To avoid possible issues with caching, assume that each query is asked
+        # once, and we always want the same response for that query.
+        self._seen_queries: set[Query] = set()
+        self._responses = responses
+        super().__init__(cache, use_cache_only)
+
+    def get_id(self) -> str:
+        return "ordered"
+
+    def _run_query(self, query: Query) -> Response:
+        self._seen_queries.add(query)
+        idx = len(self._seen_queries) - 1
+        return self._responses[idx]
