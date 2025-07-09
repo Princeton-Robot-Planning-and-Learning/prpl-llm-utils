@@ -29,6 +29,16 @@ class FunctionalRepromptCheck(RepromptCheck):
         return self._fn(query, response)
 
 
+def create_reprompt_from_error_message(
+    query: Query, response: Response, error_msg: str
+) -> Query:
+    """Append new text to the original query."""
+    addendum = f"\nPreviously, you responded:\n{response.text}"
+    addendum += f"\nYour previous response had the following error:\n{error_msg}"
+    new_prompt = query.prompt + addendum
+    return Query(new_prompt, query.imgs, query.hyperparameters)
+
+
 def query_with_reprompts(
     model: PretrainedLargeModel,
     query: Query,
