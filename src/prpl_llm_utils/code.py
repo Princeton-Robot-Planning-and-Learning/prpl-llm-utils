@@ -63,6 +63,13 @@ class SynthesizedPythonFunction:
         spec.loader.exec_module(module)
         return module
 
+    def __call__(self, *input_args: Any) -> Any:
+        """Alias for run()."""
+        return self.run(*input_args)
+
+    def __str__(self) -> str:
+        return self.code_str
+
     def run(self, *input_args: Any) -> Any:
         """Run the function on an input (that will be unpacked)."""
         module = self._load_module()
