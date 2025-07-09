@@ -10,7 +10,12 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from prpl_llm_utils.reprompting import RepromptCheck, create_reprompt_from_error_message
+from prpl_llm_utils.models import PretrainedLargeModel
+from prpl_llm_utils.reprompting import (
+    RepromptCheck,
+    create_reprompt_from_error_message,
+    query_with_reprompts,
+)
 from prpl_llm_utils.structs import Query, Response
 
 
@@ -82,3 +87,20 @@ def parse_python_code_from_text(text: str) -> str | None:
         python_response = python_remainder[:python_end]
         return python_response
     return None
+
+
+def synthesize_python_function_with_llm(
+    function_name: str,
+    model: PretrainedLargeModel,
+    query: Query,
+    reprompt_checks: list[RepromptCheck] | None = None,
+    max_attempts: int = 5,
+) -> SynthesizedPythonFunction:
+    """Synthesize a Python function with an LLM."""
+    if reprompt_checks is None:
+        reprompt_checks = []
+    response = query_with_reprompts(model, query, reprompt_checks, max_attempts)
+    python_code = parse_python_code_from_text(response.text)
+    if python_code is None:
+        raise RuntimeError("No python code found. Consider SyntaxRepromptCheck().")
+    return SynthesizedPythonFunction(function_name, python_code)

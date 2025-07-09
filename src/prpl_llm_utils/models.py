@@ -125,3 +125,31 @@ class CannedResponseModel(PretrainedLargeModel):
 
     def run_query(self, query: Query) -> Response:
         return self._query_to_response[query]
+
+
+class OrderedResponseModel(PretrainedLargeModel):
+    """A model that returns responses from a list and raises an error if the
+    index is exceeded.
+
+    This is useful for development and testing.
+    """
+
+    def __init__(
+        self,
+        responses: list[Response],
+        cache: PretrainedLargeModelCache,
+        use_cache_only: bool = False,
+    ) -> None:
+        # To avoid possible issues with caching, assume that each query is asked
+        # once, and we always want the same response for that query.
+        self._seen_queries: set[Query] = set()
+        self._responses = responses
+        super().__init__(cache, use_cache_only)
+
+    def get_id(self) -> str:
+        return "ordered"
+
+    def run_query(self, query: Query) -> Response:
+        self._seen_queries.add(query)
+        idx = len(self._seen_queries) - 1
+        return self._responses[idx]
